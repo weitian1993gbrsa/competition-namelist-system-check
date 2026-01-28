@@ -1,7 +1,10 @@
 @echo off
 cd /d "%~dp0"
 echo Starting Namelist Manager...
-echo Please ensure you have run 'npm install' at least once (which I did for you!).
+if not exist "node_modules" (
+    echo node_modules not found. Installing dependencies...
+    call npm install
+)
 echo.
 echo Opening Browser...
 start http://localhost:5173

@@ -8,7 +8,7 @@ import vueDevTools from 'vite-plugin-vue-devtools'
 export default defineConfig({
   plugins: [
     vue(),
-    // vueDevTools(), // Disabled due to conflict with Tailwind v4
+    vueDevTools(), // <--- Uncomment this line
   ],
   resolve: {
     alias: {

@@ -13,7 +13,168 @@ const stationCount = computed(() => Number(route.query.stationCount) || 12)
 const rowsPerPage = computed(() => Number(route.query.rows) || 25)
 const displayStartTime = computed(() => (route.query.startTime as string) || '09:00')
 
-// ... (logic)
+// --- Helper for time manipulation (Duplicated from RundownView - Consider extracting to shared util later) ---
+const addMinutes = (timeStr: string, minutes: number): string => {
+    const [h, m] = timeStr.split(':').map(Number)
+    const date = new Date()
+    date.setHours(h || 0, m || 0, 0, 0)
+    date.setMinutes(date.getMinutes() + minutes)
+    return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+// --- Schedule Logic (Simplified for Print) ---
+// We need to rebuild the schedule map to get accurate times for the *entire* rundown
+// or just the target event.
+const eventScheduleMap = computed(() => {
+    const allParts = store.participants.filter((p: any) => p.heat !== undefined)
+    if (allParts.length === 0) return new Map<string, { startTime: string, startHeat: number }>()
+
+    const heatEventMap = new Map<number, string>()
+    allParts.forEach((p: any) => {
+        if (!heatEventMap.has(p.heat!)) heatEventMap.set(p.heat!, p.eventCode)
+    })
+
+    const sortedHeats = Array.from(heatEventMap.keys()).sort((a, b) => a - b)
+    const eventOrder: string[] = []
+    const eventFirstHeat = new Map<string, number>()
+    const eventLastHeat = new Map<string, number>()
+
+    sortedHeats.forEach(h => {
+        const code = heatEventMap.get(h)!
+        if (!eventFirstHeat.has(code)) {
+            eventOrder.push(code)
+            eventFirstHeat.set(code, h)
+        }
+        eventLastHeat.set(code, h)
+    })
+
+    const schedule = new Map<string, { startTime: string, startHeat: number }>()
+    
+    // Use the Passed Start Time as Global Start if we are viewing everything?
+    // actually RundownView logic is: Global Start -> Chain Events.
+    // If Filtered View: Logic in RundownView `displayStartTime` getter handles the specific time for that event.
+    // Here we trust `displayStartTime` passed in query IS the start time for the first visible event.
+    
+    let currentTime = displayStartTime.value 
+
+    // If we are filtering, we only care about that event's start time (which is passed in).
+    // If we are showing ALL, we chain them.
+    
+    // However, if we show ALL, `displayStartTime` param is the GLOBAL start time.
+    // If we show ONE, `displayStartTime` param is THAT EVENT'S start time.
+    
+    // Standard Chaining Logic
+    eventOrder.forEach((code, idx) => {
+        // If we represent a filtered view, we might only have one event in `eventOrder`?
+        // No, `allParts` gets everything from store.
+        
+        // If we are in filtered mode, `displayStartTime` is for `targetEventCode`.
+        // So we should just use that for the target event.
+        
+        // But to keep it simple: We only display rows for the target scope.
+        // And we calculate time for each heat.
+        // Let's assume the Query Param `startTime` is the start time of the FIRST visible heat.
+        
+        const firstHeat = eventFirstHeat.get(code)!
+        const lastHeat = eventLastHeat.get(code)!
+        const heatCount = lastHeat - firstHeat + 1
+        
+        // We set the schedule map. 
+        // Logic Gap: If we only print Event B, and pass its start time, 
+        // we essentially treat Event B as the "Start".
+        
+         schedule.set(code, { startTime: currentTime, startHeat: firstHeat })
+
+         const timeAdded = heatCount * heatDuration.value
+         currentTime = addMinutes(currentTime, timeAdded)
+    })
+    
+    // OVERRIDE for consistency:
+    // If we have a target event, force its start time to match the query param (visually)
+    if (targetEventCode.value) {
+         const sched = schedule.get(targetEventCode.value)
+         if (sched) {
+             sched.startTime = displayStartTime.value
+         }
+    } else {
+        // Global mode: simplistic assumption that first event starts at query param time.
+        // (Refining this would require re-implementing the full logic, but this is usually sufficient for print)
+        const firstCode = eventOrder[0]
+        if (firstCode) {
+             const sched = schedule.get(firstCode)
+             if (sched) sched.startTime = displayStartTime.value
+        }
+    }
+
+    return schedule
+})
+
+const rundownRows = computed(() => {
+    let parts = store.participants.filter((p: any) => p.heat !== undefined)
+    
+    if (targetEventCode.value) {
+        parts = parts.filter((p: any) => p.eventCode === targetEventCode.value)
+    }
+
+    if (parts.length === 0) return []
+
+    const heatMap = new Map<number, typeof parts>()
+    let maxHeat = 0
+    parts.forEach((p: any) => {
+        const h = p.heat!
+        if (h > maxHeat) maxHeat = h
+        if (!heatMap.has(h)) heatMap.set(h, [])
+        heatMap.get(h)!.push(p)
+    })
+
+    const rows: any[] = []
+    const sortedHeats = Array.from(heatMap.keys()).sort((a, b) => a - b)
+
+    sortedHeats.forEach(h => {
+        const participantsInHeat = heatMap.get(h)!
+        const heatEventCode = participantsInHeat[0]?.eventCode
+        
+        // For Print, we force the requested station count
+        const currentStCount = stationCount.value
+
+        for (let s = 1; s <= currentStCount; s++) {
+            const pts = participantsInHeat.filter((x: any) => x.station === s)
+            if (pts.length > 0) {
+                 const p0 = pts[0]
+                 if (!p0) continue // Safety check
+                 
+                 const combinedNames = pts.map((p: any) => p.name).join('\n')
+                 rows.push({
+                        id: p0.id,
+                        heat: p0.heat!,
+                        scheduleTime: p0.scheduleTime!,
+                        station: p0.station!,
+                        eventCode: p0.eventCode,
+                        division: p0.division,
+                        name: combinedNames,
+                        team: p0.team || '',
+                        isPlaceholder: false
+                 })
+            } else {
+                 // Include Placeholders for Grid Alignment? 
+                 // User requested "My own template". Usually tabular.
+                 // Let's include them to keep the grid structure solid.
+                  rows.push({
+                    id: `ph-${h}-${s}`,
+                    heat: h,
+                    scheduleTime: '', 
+                    station: s,
+                    eventCode: heatEventCode,
+                    division: '-',
+                    name: '-',
+                    team: '-',
+                    isPlaceholder: true
+                })
+            }
+        }
+    })
+    return rows
+})
 
 // --- Manual Pagination for Print ---
 const pages = computed(() => {
@@ -25,8 +186,13 @@ const pages = computed(() => {
     const activeRows = rundownRows.value.filter(r => !r.isPlaceholder)
     
     const normalize = (code: string | undefined) => (code || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
-    // Force stricter limit for Landscape A4 to avoid footer overlap
-    const SAFE_LINES = 23 
+    
+    // Balanced Cost Model
+    // 1-Name (1 line) -> Target 26 rows. Cost ~1.35 * 26 = 35.1
+    // 4-Name (4 lines) -> Target 8 rows. Cost ~4.35 * 8 = 34.8
+    // 2-Name (2 lines) -> Target ~15 rows. Cost ~2.35 * 15 = 35.25
+    const ROW_OVERHEAD = 0.35
+    const SAFE_COST = 35.5 
 
     let rowIdx = 0
 
@@ -34,8 +200,10 @@ const pages = computed(() => {
          if (currentPage.length === 0) {}
 
          // Current Cost
-         const currentPageCost = currentPage.reduce((sum, r) => sum + Math.max(1, (r.name || '').split('\n').length), 0)
-         const remainingLines = SAFE_LINES - currentPageCost
+         const currentPageCost = currentPage.reduce((sum, r) => {
+             const lines = Math.max(1, (r.name || '').split('\n').length)
+             return sum + lines + ROW_OVERHEAD
+         }, 0)
 
          // Check Event Change
          const currentRow = activeRows[rowIdx]
@@ -51,10 +219,11 @@ const pages = computed(() => {
              }
          }
         
-         // Add Row logic (Simplified: One by one)
-         const cost = Math.max(1, (currentRow.name || '').split('\n').length)
+         // Calculate Row Cost
+         const lines = Math.max(1, (currentRow.name || '').split('\n').length)
+         const cost = lines + ROW_OVERHEAD
          
-         if (currentPage.length > 0 && currentPageCost + cost > SAFE_LINES) {
+         if (currentPage.length > 0 && currentPageCost + cost > SAFE_COST) {
              _pages.push(currentPage)
              currentPage = []
              continue
@@ -88,27 +257,48 @@ const getEventName = (code: string) => {
     return store.events.find(e => e.code === code)?.name || code
 }
 
+const getTeamClass = (team: string) => {
+    const len = (team || '').length
+    if (len > 25) return 'text-[9px]'
+    if (len > 15) return 'text-[10px]'
+    return ''
+}
+
 const closeWindow = () => {
     window.close()
 }
 
-// Auto Print
-onMounted(() => {
-    setTimeout(() => {
-        window.print()
-    }, 1000) // Small delay to ensure render
-})
+const printNow = () => {
+    window.print()
+}
+
+// Auto Print removed in favor of manual button
+// onMounted(() => {
+//     setTimeout(() => {
+//         window.print()
+//     }, 1000) 
+// })
 </script>
 
 <template>
   <div class="print-container bg-white text-black min-h-screen">
       <!-- Info Header (Instructions only visible on screen) -->
-      <div class="print:hidden p-4 bg-blue-50 border-b border-blue-100 mb-4 flex justify-between items-center undo-header">
-          <div>
-              <p class="text-sm text-blue-800 font-bold">🖨️ Print Preview</p>
-              <p class="text-xs text-blue-600">Press Ctrl+P or use browser menu to print. Adjust Scale in print settings if needed.</p>
+      <div class="print:hidden p-4 bg-white border-b border-gray-200 mb-4 flex justify-between items-center shadow-sm undo-header">
+          <div class="flex items-center gap-4">
+               <button @click="closeWindow" class="text-gray-500 hover:text-gray-700 font-medium flex items-center gap-1">
+                  <span>← Close</span>
+               </button>
+               <div class="h-6 w-px bg-gray-300"></div>
+               <div>
+                   <h1 class="font-bold text-lg text-gray-800">Print Preview</h1>
+               </div>
           </div>
-          <button @click="closeWindow" class="text-sm text-gray-500 hover:text-gray-700 underline">Close Window</button>
+          <button @click="printNow" class="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 font-bold shadow-sm flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <span>Export to PDF</span>
+          </button>
       </div>
 
       <div v-if="pages.length === 0" class="p-8 text-center text-gray-500">
@@ -118,43 +308,39 @@ onMounted(() => {
       <!-- Pages -->
       <div v-for="(page, pageIdx) in pages" :key="pageIdx" class="print-page relative">
           <!-- Page Header -->
-          <div class="mb-4 border-b-2 border-black pb-2">
-              <div class="flex justify-between items-end">
-                  <div>
-                      <h1 class="text-2xl font-bold uppercase tracking-tight">{{ getEventName(page[0]?.eventCode) }}</h1>
-                      <div class="text-sm font-mono mt-1">
-                          HEAT DURATION: {{ heatDuration }} MIN | STATIONS: {{ stationCount }}
-                      </div>
-                  </div>
-                  <div class="text-right">
-                       <div class="text-xs font-bold text-gray-500 uppercase">Rundown Schedule</div>
-                       <div class="text-xl font-bold">{{ displayStartTime }} START</div>
-                  </div>
-              </div>
+          <div class="mb-2 border-b-2 border-black pb-1">
+              <h1 class="text-xl font-bold uppercase tracking-tight">{{ getEventName(page[0]?.eventCode) }}</h1>
           </div>
 
           <!-- Table -->
           <table class="w-full text-xs border-collapse">
               <thead>
                   <tr class="bg-gray-100 border-b border-black">
-                      <th class="py-1 px-2 text-left w-12 border-r border-gray-300">HEAT</th>
-                      <th class="py-1 px-2 text-left w-16 border-r border-gray-300">TIME</th>
-                      <th class="py-1 px-2 text-left w-12 border-r border-gray-300">STATION</th>
-                      <th class="py-1 px-2 text-left w-24 border-r border-gray-300">DIVISION</th>
-                      <th class="py-1 px-2 text-left border-r border-gray-300">NAME</th>
-                      <th class="py-1 px-2 text-left w-48">TEAM</th>
+                      <th class="py-0.5 px-2 text-left w-12 border-r border-gray-300">HEAT</th>
+                      <th class="py-0.5 px-2 text-left w-16 border-r border-gray-300">TIME</th>
+                      <th class="py-0.5 px-2 text-left w-12 border-r border-gray-300">STATION</th>
+                      <th class="py-0.5 px-2 text-left w-32 border-r border-gray-300">DIVISION</th>
+                      <th class="py-0.5 px-2 text-left border-r border-gray-300">NAME</th>
+                      <th class="py-0.5 px-2 text-left w-52">TEAM</th>
                   </tr>
               </thead>
               <tbody>
                   <tr v-for="row in page" :key="row.id" class="border-b border-gray-200">
-                      <td class="py-1 px-2 border-r border-gray-300 font-bold align-top">{{ row.heat }}</td>
-                      <td class="py-1 px-2 border-r border-gray-300 font-mono align-top">
+                      <td class="py-0.5 px-2 border-r border-gray-300 font-bold align-top">{{ row.heat }}</td>
+                      <td class="py-0.5 px-2 border-r border-gray-300 font-mono align-top">
                           {{ calculateDisplayTime(row.heat, row.eventCode) }}
                       </td>
-                      <td class="py-1 px-2 border-r border-gray-300 font-bold align-top">{{ row.station }}</td>
-                      <td class="py-1 px-2 border-r border-gray-300 align-top">{{ row.division }}</td>
-                      <td class="py-1 px-2 border-r border-gray-300 align-top font-bold whitespace-pre-line">{{ row.name }}</td>
-                      <td class="py-1 px-2 align-top text-gray-600">{{ row.team }}</td>
+                      <td class="py-0.5 px-2 border-r border-gray-300 font-bold align-top">{{ row.station }}</td>
+                      <td class="py-0.5 px-2 border-r border-gray-300 align-top whitespace-nowrap">{{ row.division }}</td>
+                      <td class="py-0.5 px-2 border-r border-gray-300 align-top font-bold">
+                          <div v-for="(nameLine, idx) in row.name.split('\n')" :key="idx" class="flex items-start gap-1">
+                              <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3 text-gray-400 mt-[3px] shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                                  <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd" />
+                              </svg>
+                              <span>{{ nameLine }}</span>
+                          </div>
+                      </td>
+                      <td class="py-0.5 px-2 align-top text-gray-600 whitespace-nowrap transition-all" :class="getTeamClass(row.team)">{{ row.team }}</td>
                   </tr>
               </tbody>
           </table>
@@ -185,8 +371,7 @@ onMounted(() => {
     }
     .print-page {
         break-after: page;
-        min-height: 190mm; /* A4 Landscape height approx */
-        padding-bottom: 20px;
+        min-height: 180mm; /* Reduced to avoid spillover blank pages */
     }
     .print-page:last-child {
         break-after: avoid;

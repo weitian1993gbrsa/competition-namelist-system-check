@@ -96,9 +96,9 @@ const fileMerges = ref<Record<string, XLSX.Range[]>>({}) // FileName -> Merges f
 
 const previewData = computed(() => jsonData.value.slice(0, 5))
 
-// Simple UUID generator since we didn't install uuid package
+// Use native UUID generator
 function generateId() {
-  return Math.random().toString(36).substring(2, 15)
+  return crypto.randomUUID()
 }
 
 function triggerFileInput() {

@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { DEFAULT_DIVISIONS, DEFAULT_EVENTS } from '@/config/defaults'
 import type { Participant, EventConfig, DivisionConfig } from '@/config/defaults'
+import { scheduleParticipants, addMinutes } from '@/services/rundownService'
+import type { RundownConfig } from '@/services/rundownService'
 
 export const useNamelistStore = defineStore('namelist', () => {
     // --- State ---
@@ -285,207 +287,61 @@ export const useNamelistStore = defineStore('namelist', () => {
     }
 
     function generateRundown(targetEventCode?: string) {
-        // 1. Identify which participants to schedule
-        // If targetEventCode is set, only schedule for that Event.
-        // Otherwise schedule for ALL (in order).
-        // Note: For now, if we schedule for one event, we should probably find the "max heat" of previous events if we want continuous,
-        // but the user requirement seems to imply filtering by event view. 
-        // For simplicity and matching the "Event/Division" sorting rule, we will re-generate for the target scope.
+        // Prepare context for service
+        // We need an array of participants to schedule (all or filtered)
+        // But the service does filtering too if we pass targetEventCode.
+        // Let's pass ALL participants and let the service filter/sort, 
+        // OR pass just what we want.
+        // The service needs ALL participants anyway if we want `getSortableEntryCode` to work correctly 
+        // (it calculates index based on full division list).
 
-        let partsToSchedule: Participant[] = []
+        // Calculate start parameters
+        let startHeat = 1
+        let startTime: string | undefined = undefined
 
         if (targetEventCode) {
-            // Clear existing for this event
-            clearRundown(targetEventCode)
-            partsToSchedule = participants.value.filter(p => p.eventCode === targetEventCode)
-        } else {
-            clearRundown() // Clear all
-            partsToSchedule = [...participants.value]
-        }
-
-        if (partsToSchedule.length === 0) return
-
-        // 2. Sort Participants
-        // Order: Event Index -> Division Index -> Team -> Name
-
-        // Helper to normalize strings for comparison
-        const norm = (s: string) => (s || '').trim()
-
-        partsToSchedule.sort((a, b) => {
-            const codeA = norm(a.eventCode)
-            const codeB = norm(b.eventCode)
-
-            // 1. Event Sort
-            const evtIdxA = events.value.findIndex(e => norm(e.code) === codeA)
-            const evtIdxB = events.value.findIndex(e => norm(e.code) === codeB)
-
-            // If finding valid index, prioritized. 
-            // If both configured: sort by index
-            if (evtIdxA !== -1 && evtIdxB !== -1) {
-                if (evtIdxA !== evtIdxB) return evtIdxA - evtIdxB
-            }
-            // If A configured and B not -> A first
-            else if (evtIdxA !== -1 && evtIdxB === -1) {
-                return -1
-            }
-            // If A not configured and B configured -> B first
-            else if (evtIdxA === -1 && evtIdxB !== -1) {
-                return 1
-            }
-            // If both not configured: Sort alphabetically by Code
-            else if (evtIdxA === -1 && evtIdxB === -1) {
-                if (codeA !== codeB) return codeA.localeCompare(codeB)
-            }
-
-            // 2. Entry Code Sort (A001, A002, B001...)
-            // This handles Division order (by prefix) and Participant order (by index)
-            const entryA = getParticipantEntryCode(a)
-            const entryB = getParticipantEntryCode(b)
-
-            if (entryA !== entryB) {
-                if (entryA !== '-' && entryB !== '-') {
-                    return entryA.localeCompare(entryB)
-                }
-                if (entryA === '-') return 1
-                if (entryB === '-') return -1
-            }
-
-            // 3. Import Order Preservation (Fallback)
-            // Array.sort is stable so returning 0 preserves the original store order
-            return 0
-        })
-
-        // 3. Assign Heats and Stations
-        // Group by groupId
-        const entries: Array<{ id: string, type: 'group' | 'single', participants: Participant[] }> = []
-        const processedGroups = new Set<string>()
-
-        partsToSchedule.forEach(p => {
-            if (p.groupId) {
-                if (!processedGroups.has(p.groupId)) {
-                    processedGroups.add(p.groupId)
-                    const groupParts = partsToSchedule.filter(gp => gp.groupId === p.groupId)
-                    entries.push({ id: p.groupId, type: 'group', participants: groupParts })
-                }
-            } else {
-                entries.push({ id: p.id, type: 'single', participants: [p] })
-            }
-        })
-
-        // Now schedule entries
-        let currentHeat = 1
-
-        // If generating for a specific event, try to continue from the last used heat of OTHER events
-        if (targetEventCode) {
+            // "Append" mode logic
             const otherParts = participants.value.filter(p => p.eventCode !== targetEventCode && p.heat !== undefined)
             if (otherParts.length > 0) {
                 const maxHeat = Math.max(...otherParts.map(p => p.heat || 0))
-                currentHeat = maxHeat + 1
-            }
-        }
+                startHeat = maxHeat + 1
 
-        // Initialize State for Cumulative Scheduling
-        let currentStation = 1
-        let lastEventCode = ''
-
-        // Initial Config Resolution
-        // If targetEventCode is set, use its config. 
-        // If ALL, use the config of the FIRST event in the list (if exists), else Global.
-        const firstEventCode = entries[0]?.participants[0]?.eventCode
-        const initialConfig = getRundownConfig(targetEventCode || firstEventCode || 'GLOBAL')
-
-        // Setup initial time
-        // If continuing from previous rundown (targetEventCode set and other parts exist)
-        // currentHeat is already advanced above. We need start time for THAT heat.
-        // But getHeatTime was stateless before.
-        // Simple strategy:
-        // 1. If startHeat > 1, we need to know when the previous heat ended? 
-        //    Or just assume we start at the 'Config Start Time' + offset?
-        //    For "All Events" refresh, we start at Config Start Time.
-        //    For "Target Event" append, we start after the last heat.
-
-        let currentHeatStartTime = initialConfig.startTime || '09:00'
-
-        // Helper to add minutes
-        const addMinutes = (timeStr: string, minutes: number): string => {
-            const parts = timeStr.split(':')
-            const h = Number(parts[0]) || 0
-            const m = Number(parts[1]) || 0
-            const date = new Date()
-            date.setHours(h, m, 0, 0)
-            date.setMinutes(date.getMinutes() + minutes)
-            const newH = String(date.getHours()).padStart(2, '0')
-            const newM = String(date.getMinutes()).padStart(2, '0')
-            return `${newH}:${newM}`
-        }
-
-        // Handle Append Mode (Target Event)
-        if (targetEventCode && currentHeat > 1) {
-            // We need to calculate where we are starting.
-            // Best guess: Find the max time of existing participants?
-            // Or just use the target event's start time if provided?
-            // The old logic was: maxHeat + 1. 
-            // We need a time for heat N.
-            // Let's look for the module that calculated this before...
-            // It used `getHeatTime(currentHeat)`.
-            // We can stick to that IF we assume constant duration for previous events.
-            // BUT if we want true dynamic duration, we'd have to replay everything.
-            // COMPROMISE: If appending, just grab the latest time from the store or use current Config relative to Heat 1?
-            // Let's use the startTime from the PREVIOUS heat if available.
-            const allWithTime = participants.value.filter(p => p.scheduleTime).sort((a, b) => (a.heat || 0) - (b.heat || 0))
-            if (allWithTime.length > 0) {
-                const lastP = allWithTime[allWithTime.length - 1]
-                if (lastP) {
-                    // End of last heat = Start of Last Heat + Duration of Last Heat's Event
-                    const lastEventConf = getRundownConfig(lastP.eventCode)
-                    const lastDur = lastEventConf.heatDuration ?? 2
-                    currentHeatStartTime = addMinutes(lastP.scheduleTime!, lastDur)
+                // Find start time for this new heat
+                // We find the last scheduled participant to get the "end time" of previous heats
+                const sortedByHeat = [...otherParts].sort((a, b) => (a.heat || 0) - (b.heat || 0))
+                const lastP = sortedByHeat[sortedByHeat.length - 1]
+                if (lastP && lastP.scheduleTime) {
+                    const lastConf = getRundownConfig(lastP.eventCode)
+                    startTime = addMinutes(lastP.scheduleTime, lastConf.heatDuration ?? 2)
                 }
             }
         }
 
-        // ITERATION
-        entries.forEach(entry => {
-            if (!entry.participants[0]) return
-            const entryEvent = norm(entry.participants[0].eventCode)
-
-            // Dynamic Config for THIS entry
-            const entryConfig = getRundownConfig(entryEvent)
-            const maxStations = entryConfig.stationCount ?? 12
-            const heatDuration = entryConfig.heatDuration ?? 2
-
-            // Logic to force new heat if event changes
-            if (lastEventCode && entryEvent !== lastEventCode) {
-                if (currentStation > 1) {
-                    // Advance Heat
-                    currentHeat++
-                    currentStation = 1
-                    // Add duration of PREVIOUS heat to time
-                    // Wait, we need to track duration of the heat that just finished.
-                    // If we switch events, the previous heat used the PREVIOUS event's duration.
-                    // We need to apply that duration NOW to update start time for the NEW heat.
-                    const prevConfig = getRundownConfig(lastEventCode)
-                    currentHeatStartTime = addMinutes(currentHeatStartTime, prevConfig.heatDuration ?? 2)
-                }
+        // Execute Pure Scheduling
+        const updates = scheduleParticipants(
+            participants.value,
+            events.value,
+            entryCodes.value, // Pass the prefix map
+            getRundownConfig, // Pass the config getter
+            {
+                targetEventCode,
+                startHeatNumber: startHeat,
+                initialStartTime: startTime
             }
-            lastEventCode = entryEvent
+        )
 
-            // Check Station Capacity
-            if (currentStation > maxStations) {
-                currentHeat++
-                currentStation = 1
-                // Add duration of the heat that just filled up.
-                // Since this heat belonged to 'entryEvent' (mostly), use its duration.
-                currentHeatStartTime = addMinutes(currentHeatStartTime, heatDuration)
+        // Apply Updates
+        // First, clear existing info for the target scope
+        clearRundown(targetEventCode)
+
+        // Apply new values
+        updates.forEach(u => {
+            const p = participants.value.find(p => p.id === u.participantId)
+            if (p) {
+                p.heat = u.heat
+                p.station = u.station
+                p.scheduleTime = u.scheduleTime
             }
-
-            // Assign
-            entry.participants.forEach(p => {
-                p.heat = currentHeat
-                p.station = currentStation
-                p.scheduleTime = currentHeatStartTime
-            })
-            currentStation++
         })
     }
 
@@ -496,11 +352,10 @@ export const useNamelistStore = defineStore('namelist', () => {
         if (recordHistory) {
             // Capture previous state for undo
             const prevData: Partial<Participant> = {}
-            for (const key of Object.keys(updates)) {
-                const k = key as keyof Participant
-                // @ts-ignore
-                prevData[k] = p[k]
-            }
+            const keys = Object.keys(updates) as Array<keyof Participant>
+            keys.forEach(key => {
+                prevData[key] = p[key] as any
+            })
             pushHistory(`Update ${p.name}`, () => updateParticipant(id, prevData, false))
         }
 

@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useNamelistStore } from '@/stores/namelist'
 import type { Participant } from '@/config/defaults'
 
+const router = useRouter()
 const store = useNamelistStore()
 
 const selectedEventCode = ref<string>('') 
@@ -558,7 +560,19 @@ const printRundown = () => {
         alert("Please Generate Rundown first.")
         return
     }
-    window.print()
+
+    const routeData = router.resolve({
+        name: 'print-rundown',
+        query: {
+            event: selectedEventCode.value,
+            rows: rowsPerPage.value,
+            heatDuration: heatDuration.value,
+            stationCount: stationCount.value,
+            startTime: displayStartTime.value
+        }
+    })
+    
+    window.open(routeData.href, '_blank')
 }
 
 const exportCSV = () => {

@@ -3,6 +3,7 @@ import DashboardView from '../views/DashboardView.vue'
 import ImportView from '../views/ImportView.vue'
 import SettingsView from '../views/SettingsView.vue'
 import RundownView from '../views/RundownView.vue'
+import RundownPrintView from '../views/RundownPrintView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -26,6 +27,11 @@ const router = createRouter({
       path: '/rundown',
       name: 'rundown',
       component: RundownView
+    },
+    {
+      path: '/print/rundown',
+      name: 'print-rundown',
+      component: RundownPrintView
     }
   ]
 })

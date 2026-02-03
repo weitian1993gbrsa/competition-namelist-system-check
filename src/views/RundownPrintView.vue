@@ -99,7 +99,7 @@ const rundownRows = computed(() => {
         for (let s = 1; s <= currentStCount; s++) {
             const pts = participantsInHeat.filter((x: any) => x.station === s)
             if (pts.length > 0) {
-                 const p0 = pts[0]
+                 const p0 = pts[0]!
                  const combinedNames = pts.map((p: any) => p.name).join('\n')
                  rows.push({
                         id: p0.id,

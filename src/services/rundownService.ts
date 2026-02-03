@@ -23,22 +23,27 @@ export interface ScheduleResult {
 
 /**
  * Adds minutes to a HH:MM time string and returns a formatted new time.
- * Handles hour wrapping correctly.
+ * OPTIMIZED: Uses simple math instead of Date objects for better performance.
  */
 export function addMinutes(timeStr: string, minutes: number): string {
-    const parts = timeStr.split(':')
-    const h = Number(parts[0]) || 0
-    const m = Number(parts[1]) || 0
+    if (!timeStr) return '00:00'
 
-    // Use Date object for robust calculation
-    const date = new Date()
-    date.setHours(h, m, 0, 0)
-    date.setMinutes(date.getMinutes() + minutes)
+    const [hStr, mStr] = timeStr.split(':')
+    const h = parseInt(hStr || '0', 10) || 0
+    const m = parseInt(mStr || '0', 10) || 0
 
-    const newH = String(date.getHours()).padStart(2, '0')
-    const newM = String(date.getMinutes()).padStart(2, '0')
+    // Convert everything to total minutes from midnight
+    let totalMinutes = (h * 60) + m + minutes
 
-    return `${newH}:${newM}`
+    // Handle wrapping (e.g. past midnight) 
+    // 1440 minutes = 24 hours
+    totalMinutes = totalMinutes % 1440
+    if (totalMinutes < 0) totalMinutes += 1440 // Handle negative subtraction if needed
+
+    const newH = Math.floor(totalMinutes / 60)
+    const newM = totalMinutes % 60
+
+    return `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`
 }
 
 /**
@@ -118,11 +123,6 @@ export function scheduleParticipants(
 
     // 2. Sort Logic
     const norm = (s: string) => (s || '').trim()
-
-    // We sort a COPY to avoid mutating the input array order (if it matters, though usually we want to return sorted order?)
-    // The requirement is to assign heats based on this sort. 
-    // The store might re-order its own list based on this, or we just compute updates.
-    // Let's assume we sort purely to determine the order of assignment.
 
     // Note: getSortableEntryCode is expensive if called repeatedly in sort. 
     // Optimization: Calculate sort keys once.

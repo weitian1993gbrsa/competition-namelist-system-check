@@ -20,7 +20,7 @@ export const useNamelistStore = defineStore('namelist', () => {
 
     // Competition Main Title
     const competitionTitle = ref<string>('COMPETITION CHAMPIONSHIPS')
-    const competitionDate = ref<string>(new Date().toISOString().split('T')[0])
+    const competitionDate = ref<string>(new Date().toISOString().split('T')[0] || '')
 
     // Undo History
     const history = ref<Array<{ description: string, undo: () => void }>>([])
@@ -247,7 +247,6 @@ export const useNamelistStore = defineStore('namelist', () => {
     }
 
     // --- Rundown Logic ---
-    // --- Rundown Logic ---
     const defaultRundownConfig = {
         startTime: '09:00',
         heatDuration: 2, // minutes
@@ -469,7 +468,7 @@ export const useNamelistStore = defineStore('namelist', () => {
                 entryCodes.value = data.entryCodes || {}
                 eventStartTimes.value = data.eventStartTimes || {}
                 competitionTitle.value = data.competitionTitle || 'COMPETITION CHAMPIONSHIPS'
-                competitionDate.value = data.competitionDate || new Date().toISOString().split('T')[0] // Load Date
+                competitionDate.value = data.competitionDate || new Date().toISOString().split('T')[0] || '' // Load Date
 
                 // Sanitize
                 sanitizeData()
@@ -498,7 +497,7 @@ export const useNamelistStore = defineStore('namelist', () => {
         entryCodes.value = {}
         eventStartTimes.value = {}
         competitionTitle.value = 'COMPETITION CHAMPIONSHIPS'
-        competitionDate.value = new Date().toISOString().split('T')[0]
+        competitionDate.value = new Date().toISOString().split('T')[0] || ''
         history.value = []
     }
 
@@ -507,7 +506,7 @@ export const useNamelistStore = defineStore('namelist', () => {
         const newComp = {
             id,
             name,
-            date: date || new Date().toISOString().split('T')[0],
+            date: date || new Date().toISOString().split('T')[0] || '',
             lastModified: new Date().toISOString()
         }
         savedCompetitions.value.push(newComp)
@@ -588,14 +587,21 @@ export const useNamelistStore = defineStore('namelist', () => {
             competitionTitle: competitionTitle.value,
             competitionDate: competitionDate.value // Save Date
         }
-        localStorage.setItem(`comp_data_${activeCompetitionId.value}`, JSON.stringify(data))
 
-        // Update metadata timestamp
-        updateCompetitionMetadata(activeCompetitionId.value, {
-            lastModified: new Date().toISOString(),
-            name: competitionTitle.value,
-            date: competitionDate.value
-        })
+        // FIX: Wrap save in try/catch to handle Storage Full quota errors
+        try {
+            localStorage.setItem(`comp_data_${activeCompetitionId.value}`, JSON.stringify(data))
+
+            // Update metadata timestamp
+            updateCompetitionMetadata(activeCompetitionId.value, {
+                lastModified: new Date().toISOString(),
+                name: competitionTitle.value,
+                date: competitionDate.value
+            })
+        } catch (e) {
+            console.error("Storage Save Failed", e)
+            alert("⚠️ Critical Warning: Storage Full! Your changes are NOT being saved.\n\nPlease Export CSV immediately and clear old competitions.")
+        }
     }
 
     return {
@@ -669,7 +675,7 @@ export function initPersistence() {
         store.savedCompetitions.push({
             id,
             name,
-            date: new Date().toISOString().split('T')[0],
+            date: new Date().toISOString().split('T')[0] || '',
             lastModified: new Date().toISOString()
         })
         localStorage.setItem('saved_competitions_index', JSON.stringify(store.savedCompetitions))

@@ -11,7 +11,7 @@ const showModal = ref(false)
 const isEditing = ref(false)
 const editingId = ref<string | null>(null)
 const formName = ref('')
-const formDate = ref(new Date().toISOString().split('T')[0])
+const formDate = ref(new Date().toISOString().split('T')[0] || '')
 
 const sortedCompetitions = computed(() => {
     return [...store.savedCompetitions].sort((a, b) => {
@@ -30,7 +30,7 @@ const openCreateModal = () => {
     isEditing.value = false
     editingId.value = null
     formName.value = ''
-    formDate.value = new Date().toISOString().split('T')[0]
+    formDate.value = new Date().toISOString().split('T')[0] || ''
     showModal.value = true
 }
 
@@ -38,7 +38,7 @@ const openEditModal = (comp: any) => {
     isEditing.value = true
     editingId.value = comp.id
     formName.value = comp.name
-    formDate.value = comp.date || new Date().toISOString().split('T')[0]
+    formDate.value = comp.date || new Date().toISOString().split('T')[0] || ''
     showModal.value = true
 }
 

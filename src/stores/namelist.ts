@@ -5,6 +5,9 @@ import type { Participant, EventConfig, DivisionConfig } from '@/config/defaults
 import { scheduleParticipants, addMinutes } from '@/services/rundownService'
 import type { RundownConfig } from '@/services/rundownService'
 
+// Module-level flag to break recursion between auto-save and metadata updates
+let isAutoSaving = false
+
 export const useNamelistStore = defineStore('namelist', () => {
     // --- State ---
     const events = ref<EventConfig[]>([...DEFAULT_EVENTS])
@@ -178,31 +181,40 @@ export const useNamelistStore = defineStore('namelist', () => {
         participants.value = participants.value.filter(p => (p.team || 'INDEPENDENT') !== teamName)
     }
 
-    function sanitizeData() {
-        const validDivisionNames = new Set(divisions.value.map(d => d.name))
+    function performSanitization(
+        evts: EventConfig[],
+        divs: DivisionConfig[],
+        parts: Participant[],
+        codes: Record<string, string>
+    ) {
+        const validDivisionNames = new Set(divs.map(d => d.name))
 
         // 1. Clean up event.allowedDivisions
-        events.value.forEach(evt => {
+        evts.forEach(evt => {
             if (evt.allowedDivisions && evt.allowedDivisions.length > 0) {
                 evt.allowedDivisions = evt.allowedDivisions.filter(name => validDivisionNames.has(name))
             }
         })
 
         // 2. Clean up participants
-        participants.value.forEach(p => {
+        parts.forEach(p => {
             if (p.division && !validDivisionNames.has(p.division)) {
                 p.division = '' // Clear if invalid
             }
         })
 
-        // 3. Clean up entryCodes (optional but good for consistency)
-        Object.keys(entryCodes.value).forEach(key => {
-            const parts = key.split('|')
-            const divPart = parts[1]
-            if (parts.length === 2 && divPart && !validDivisionNames.has(divPart)) {
-                delete entryCodes.value[key]
+        // 3. Clean up entryCodes
+        Object.keys(codes).forEach(key => {
+            const partsConf = key.split('|')
+            const divPart = partsConf[1]
+            if (partsConf.length === 2 && divPart && !validDivisionNames.has(divPart)) {
+                delete codes[key]
             }
         })
+    }
+
+    function sanitizeData() {
+        performSanitization(events.value, divisions.value, participants.value, entryCodes.value)
     }
 
     function deleteDivision(divisionName: string) {
@@ -447,31 +459,40 @@ export const useNamelistStore = defineStore('namelist', () => {
         if (saved) {
             try {
                 const data = JSON.parse(saved)
-                // Restore State
-                events.value = data.events || [...DEFAULT_EVENTS]
+
+                // Prepare RAW data
+                const rawEvents = data.events || [...DEFAULT_EVENTS]
+                let rawDivisions: DivisionConfig[] = []
 
                 // Divisions Migration Logic
                 if (data.divisions) {
                     if (Array.isArray(data.divisions) && typeof data.divisions[0] === 'string') {
-                        divisions.value = (data.divisions as string[]).map((name: string) => {
+                        rawDivisions = (data.divisions as string[]).map((name: string) => {
                             const def = DEFAULT_DIVISIONS.find(d => d.name === name)
                             return def ? { ...def } : { name, prefix: '' }
                         })
                     } else {
-                        divisions.value = data.divisions
+                        rawDivisions = data.divisions
                     }
                 } else {
-                    divisions.value = [...DEFAULT_DIVISIONS]
+                    rawDivisions = [...DEFAULT_DIVISIONS]
                 }
 
-                participants.value = data.participants || []
-                entryCodes.value = data.entryCodes || {}
+                const rawParticipants = data.participants || []
+                const rawEntryCodes = data.entryCodes || {}
+
+                // Optimize: Sanitize RAW data before reactivity
+                performSanitization(rawEvents, rawDivisions, rawParticipants, rawEntryCodes)
+
+                // Restore State (Batch assignment triggers reactivity once)
+                events.value = rawEvents
+                divisions.value = rawDivisions
+                participants.value = rawParticipants
+                entryCodes.value = rawEntryCodes
+
                 eventStartTimes.value = data.eventStartTimes || {}
                 competitionTitle.value = data.competitionTitle || 'COMPETITION CHAMPIONSHIPS'
                 competitionDate.value = data.competitionDate || new Date().toISOString().split('T')[0] || '' // Load Date
-
-                // Sanitize
-                sanitizeData()
 
                 // Set Active
                 activeCompetitionId.value = id
@@ -578,6 +599,9 @@ export const useNamelistStore = defineStore('namelist', () => {
     function saveCurrentCompetition() {
         if (!activeCompetitionId.value) return
 
+        // Prevent recursive trigger
+        isAutoSaving = true
+
         const data = {
             events: events.value,
             divisions: divisions.value,
@@ -601,6 +625,9 @@ export const useNamelistStore = defineStore('namelist', () => {
         } catch (e) {
             console.error("Storage Save Failed", e)
             alert("⚠️ Critical Warning: Storage Full! Your changes are NOT being saved.\n\nPlease Export CSV immediately and clear old competitions.")
+        } finally {
+            // Reset flag
+            isAutoSaving = false
         }
     }
 
@@ -689,6 +716,8 @@ export function initPersistence() {
 
     // 3. Subscribe for Auto-Save
     store.$subscribe((mutation, state) => {
+        if (isAutoSaving) return // Break recursion
+
         if (store.activeCompetitionId) {
             // Persist Active ID
             localStorage.setItem('active_competition_id', store.activeCompetitionId)

@@ -12,7 +12,7 @@ const selectedEventCode = ref<string>('')
 // Local state for inputs (initialized with default or current event config)
 const currentConfig = computed(() => store.getRundownConfig(selectedEventCode.value))
 
-const startTime = ref(currentConfig.value.startTime)
+// REMOVED: const startTime = ref(currentConfig.value.startTime) 
 const heatDuration = ref(currentConfig.value.heatDuration)
 const stationCount = ref(currentConfig.value.stationCount)
 const rowsPerPage = ref(currentConfig.value.rowsPerPage) // Default to 30
@@ -20,7 +20,7 @@ const rowsPerPage = ref(currentConfig.value.rowsPerPage) // Default to 30
 // Watch for Event Selection Change -> Reload Config
 watch(selectedEventCode, () => {
     const newConfig = store.getRundownConfig(selectedEventCode.value)
-    startTime.value = newConfig.startTime
+    // startTime is handled by displayStartTime computed
     heatDuration.value = newConfig.heatDuration
     stationCount.value = newConfig.stationCount
     rowsPerPage.value = newConfig.rowsPerPage
@@ -409,14 +409,7 @@ const paginatedRundown = computed(() => {
 })
 
 const generate = () => {
-    if (selectedEventCode.value) {
-        store.updateRundownConfig({
-            startTime: startTime.value, 
-            heatDuration: Number(heatDuration.value),
-            stationCount: Number(stationCount.value),
-            rowsPerPage: Number(rowsPerPage.value)
-        }, selectedEventCode.value)
-    }
+    // REDUNDANT REMOVED: store.updateRundownConfig
     store.generateRundown(selectedEventCode.value)
 }
 
@@ -432,23 +425,35 @@ const wipe = () => {
     }
 }
 
+// Pre-calculate Heat Times to avoid O(N^2) in template
+const heatTimeMap = computed(() => {
+    const map = new Map<number, string>()
+    if (rundownRows.value.length === 0) return map
+
+    // 1. Build Heat -> Event Code Map
+    const heatEventCode = new Map<number, string>()
+    rundownRows.value.forEach(r => {
+        if (!heatEventCode.has(r.heat)) heatEventCode.set(r.heat, r.eventCode)
+    })
+
+    // 2. Calculate times
+    heatEventCode.forEach((code, heat) => {
+        const sched = eventScheduleMap.value.get(code)
+        if (sched) {
+            const conf = store.getRundownConfig(code)
+            const duration = conf.heatDuration ?? 2
+            const heatDiff = heat - sched.startHeat
+            const offset = heatDiff * duration
+            map.set(heat, addMinutes(sched.startTime, offset))
+        } else {
+             map.set(heat, '-')
+        }
+    })
+    return map
+})
+
 const calculateDisplayTime = (heat: number) => {
-    // FIX APPLIED: Uses specific event duration instead of global
-    const row = rundownRows.value.find(r => r.heat === heat)
-    if (!row) return '-'
-    const code = row.eventCode
-
-    const sched = eventScheduleMap.value.get(code)
-    if (!sched) return '-'
-
-    // FIX: Look up duration for THIS event
-    const conf = store.getRundownConfig(code)
-    const duration = conf.heatDuration ?? 2
-
-    const heatDiff = heat - sched.startHeat
-    const offset = heatDiff * duration 
-    
-    return addMinutes(sched.startTime, offset)
+    return heatTimeMap.value.get(heat) || '-'
 }
 
 const printRundown = () => {
@@ -645,7 +650,6 @@ const handleRowClick = (p: typeof rundownRows.value[0]) => {
                     </div>
                 </div>
                 
-
 
                 <div class="mt-4 flex gap-3">
                     <button @click="generate" class="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 font-medium shadow-sm transition-colors">

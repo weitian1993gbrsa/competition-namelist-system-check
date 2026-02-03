@@ -303,6 +303,8 @@ export const useNamelistStore = defineStore('namelist', () => {
                 p.scheduleTime = undefined
             })
         }
+        // FIX: Force Reactivity Update so View updates immediately
+        participants.value = [...participants.value]
     }
 
     function generateRundown(targetEventCode?: string) {
@@ -352,6 +354,7 @@ export const useNamelistStore = defineStore('namelist', () => {
         // Apply Updates
         // First, clear existing info for the target scope
         clearRundown(targetEventCode)
+        // Note: clearRundown already forces update, but we do it again after applying new schedule below
 
         // Apply new values
         updates.forEach(u => {
@@ -362,6 +365,9 @@ export const useNamelistStore = defineStore('namelist', () => {
                 p.scheduleTime = u.scheduleTime
             }
         })
+
+        // FIX: Force Reactivity Update AGAIN after applying schedules
+        participants.value = [...participants.value]
     }
 
     function updateParticipant(id: string, updates: Partial<Participant>, recordHistory = true) {
@@ -403,6 +409,9 @@ export const useNamelistStore = defineStore('namelist', () => {
         p2.heat = tempHeat
         p2.station = tempStation
         p2.scheduleTime = tempTime
+
+        // Ensure Swap updates UI immediately too
+        participants.value = [...participants.value]
     }
 
     function getEntryIndex(p: Participant, list: Participant[]) {

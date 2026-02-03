@@ -2,28 +2,34 @@
   <div class="flex flex-col h-screen bg-gray-50">
     
     <!-- Top Header -->
+    <!-- Top Header -->
     <header class="bg-white border-b shadow-sm p-4 sticky top-0 z-20">
-      <div class="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
+      <div class="max-w-7xl mx-auto flex flex-col xl:flex-row justify-between items-center gap-4">
         
+        <!-- Competition Title Input Removed -->
+        <div class="flex items-center gap-2 w-full xl:w-auto">
+             <!-- Title is managed in Landing Page now -->
+        </div>
+
         <!-- Tab Toggle -->
-        <div class="flex bg-gray-100 p-1 rounded-lg">
+        <div class="flex bg-gray-100 p-1 rounded-lg shrink-0">
           <button 
             @click="activeTab = 'teams'; selectedEventCode = null; selectedTeamName = null"
-            class="px-6 py-2 rounded-md text-sm font-bold transition-all"
+            class="px-5 py-2 rounded-md text-sm font-bold transition-all"
             :class="activeTab === 'teams' ? 'bg-white text-blue-700 shadow' : 'text-gray-500 hover:text-gray-700'"
           >
             Teams
           </button>
           <button 
             @click="activeTab = 'events'; selectedEventCode = null; selectedTeamName = null"
-            class="px-6 py-2 rounded-md text-sm font-bold transition-all"
+            class="px-5 py-2 rounded-md text-sm font-bold transition-all"
             :class="activeTab === 'events' ? 'bg-white text-blue-700 shadow' : 'text-gray-500 hover:text-gray-700'"
           >
             Events
           </button>
           <button 
             @click="activeTab = 'summary'; selectedEventCode = null; selectedTeamName = null"
-            class="px-6 py-2 rounded-md text-sm font-bold transition-all"
+            class="px-5 py-2 rounded-md text-sm font-bold transition-all"
             :class="activeTab === 'summary' ? 'bg-white text-blue-700 shadow' : 'text-gray-500 hover:text-gray-700'"
           >
             Summary
@@ -31,20 +37,23 @@
         </div>
 
         <!-- Action Buttons -->
-        <div class="flex gap-3">
+        <div class="flex gap-2 shrink-0 overflow-x-auto w-full xl:w-auto">
+          <router-link to="/" class="px-3 py-2 bg-gray-600 text-white border border-gray-600 rounded shadow-sm hover:bg-gray-700 transition font-medium text-xs whitespace-nowrap flex items-center gap-1">
+             <span>←</span> Change
+          </router-link>
           <button 
             @click="wipeData" 
-            class="px-4 py-2 bg-red-100 text-red-700 border border-red-200 rounded shadow-sm hover:bg-red-200 transition font-medium text-sm"
+            class="px-3 py-2 bg-red-100 text-red-700 border border-red-200 rounded shadow-sm hover:bg-red-200 transition font-medium text-xs whitespace-nowrap"
           >
             Wipe Data
           </button>
-          <router-link to="/rundown" class="px-4 py-2 bg-indigo-600 text-white rounded shadow hover:bg-indigo-700 transition text-sm font-bold">
+          <router-link to="/rundown" class="px-3 py-2 bg-indigo-600 text-white rounded shadow hover:bg-indigo-700 transition text-xs font-bold whitespace-nowrap flex items-center">
             Rundown
           </router-link>
-          <router-link to="/import" class="px-4 py-2 bg-emerald-600 text-white rounded shadow hover:bg-emerald-700 transition text-sm font-bold">
+          <router-link to="/import" class="px-3 py-2 bg-emerald-600 text-white rounded shadow hover:bg-emerald-700 transition text-xs font-bold whitespace-nowrap flex items-center">
             + Import Data
           </router-link>
-          <router-link to="/settings" class="px-4 py-2 border bg-white rounded shadow-sm hover:bg-gray-50 text-gray-700 text-sm font-bold">
+          <router-link to="/settings" class="px-3 py-2 border bg-white rounded shadow-sm hover:bg-gray-50 text-gray-700 text-xs font-bold whitespace-nowrap flex items-center">
             Config
           </router-link>
         </div>

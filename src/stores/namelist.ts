@@ -18,6 +18,10 @@ export const useNamelistStore = defineStore('namelist', () => {
     // Event specific start times: 'EventCode' -> 'HH:MM'
     const eventStartTimes = ref<Record<string, string>>({})
 
+    // Competition Main Title
+    const competitionTitle = ref<string>('COMPETITION CHAMPIONSHIPS')
+    const competitionDate = ref<string>(new Date().toISOString().split('T')[0])
+
     // Undo History
     const history = ref<Array<{ description: string, undo: () => void }>>([])
 
@@ -74,6 +78,10 @@ export const useNamelistStore = defineStore('namelist', () => {
 
     function getEventStartTime(eventCode: string) {
         return eventStartTimes.value[eventCode]
+    }
+
+    function setCompetitionTitle(title: string) {
+        competitionTitle.value = title
     }
 
     // --- Getters ---
@@ -428,6 +436,168 @@ export const useNamelistStore = defineStore('namelist', () => {
         return divData.entryCode ? `${divData.entryCode}${String(index).padStart(3, '0')}` : '-'
     }
 
+    // --- Multi-Competition Persistence ---
+    const activeCompetitionId = ref<string | null>(null)
+    const savedCompetitions = ref<Array<{ id: string, name: string, date: string, lastModified: string }>>([])
+
+    function loadCompetition(id: string) {
+        // 1. Load data from local storage
+        const key = `comp_data_${id}`
+        const saved = localStorage.getItem(key)
+
+        if (saved) {
+            try {
+                const data = JSON.parse(saved)
+                // Restore State
+                events.value = data.events || [...DEFAULT_EVENTS]
+
+                // Divisions Migration Logic
+                if (data.divisions) {
+                    if (Array.isArray(data.divisions) && typeof data.divisions[0] === 'string') {
+                        divisions.value = (data.divisions as string[]).map((name: string) => {
+                            const def = DEFAULT_DIVISIONS.find(d => d.name === name)
+                            return def ? { ...def } : { name, prefix: '' }
+                        })
+                    } else {
+                        divisions.value = data.divisions
+                    }
+                } else {
+                    divisions.value = [...DEFAULT_DIVISIONS]
+                }
+
+                participants.value = data.participants || []
+                entryCodes.value = data.entryCodes || {}
+                eventStartTimes.value = data.eventStartTimes || {}
+                competitionTitle.value = data.competitionTitle || 'COMPETITION CHAMPIONSHIPS'
+                competitionDate.value = data.competitionDate || new Date().toISOString().split('T')[0] // Load Date
+
+                // Sanitize
+                sanitizeData()
+
+                // Set Active
+                activeCompetitionId.value = id
+
+                // Update Last Modified
+                updateCompetitionMetadata(id, { lastModified: new Date().toISOString() })
+
+            } catch (e) {
+                console.error("Failed to load competition", e)
+                alert("Error loading competition data.")
+            }
+        } else {
+            // New / Empty
+            resetToDefault()
+            activeCompetitionId.value = id
+        }
+    }
+
+    function resetToDefault() {
+        events.value = [...DEFAULT_EVENTS]
+        divisions.value = [...DEFAULT_DIVISIONS]
+        participants.value = []
+        entryCodes.value = {}
+        eventStartTimes.value = {}
+        competitionTitle.value = 'COMPETITION CHAMPIONSHIPS'
+        competitionDate.value = new Date().toISOString().split('T')[0]
+        history.value = []
+    }
+
+    function createCompetition(name: string, date: string) {
+        const id = 'comp_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9)
+        const newComp = {
+            id,
+            name,
+            date: date || new Date().toISOString().split('T')[0],
+            lastModified: new Date().toISOString()
+        }
+        savedCompetitions.value.push(newComp)
+        saveCompetitionsIndex()
+
+        // Reset state for new competition
+        resetToDefault()
+        competitionTitle.value = name // Set title to name initially
+        competitionDate.value = newComp.date
+        activeCompetitionId.value = id
+
+        // Trigger initial save
+        saveCurrentCompetition()
+
+        return id
+    }
+
+    function deleteCompetition(id: string) {
+        // Remove from index
+        savedCompetitions.value = savedCompetitions.value.filter(c => c.id !== id)
+        saveCompetitionsIndex()
+
+        // Remove data
+        localStorage.removeItem(`comp_data_${id}`)
+
+        if (activeCompetitionId.value === id) {
+            activeCompetitionId.value = null
+            resetToDefault()
+        }
+    }
+
+    function updateCompetitionMetadata(id: string, updates: Partial<{ name: string, date: string, lastModified: string }>) {
+        const comp = savedCompetitions.value.find(c => c.id === id)
+        if (comp) {
+            Object.assign(comp, updates)
+            saveCompetitionsIndex()
+
+            // Also update the actual data file to prevent sync issues
+            const key = `comp_data_${id}`
+            const stored = localStorage.getItem(key)
+            if (stored) {
+                try {
+                    const data = JSON.parse(stored)
+                    let modified = false
+
+                    if (updates.name !== undefined) {
+                        data.competitionTitle = updates.name
+                        modified = true
+                    }
+                    if (updates.date !== undefined) {
+                        data.competitionDate = updates.date
+                        modified = true
+                    }
+
+                    if (modified) {
+                        localStorage.setItem(key, JSON.stringify(data))
+                    }
+                } catch (e) {
+                    console.error("Failed to patch competition data during metadata update", e)
+                }
+            }
+        }
+    }
+
+    function saveCompetitionsIndex() {
+        localStorage.setItem('saved_competitions_index', JSON.stringify(savedCompetitions.value))
+    }
+
+    function saveCurrentCompetition() {
+        if (!activeCompetitionId.value) return
+
+        const data = {
+            events: events.value,
+            divisions: divisions.value,
+            participants: participants.value,
+            entryCodes: entryCodes.value,
+            eventStartTimes: eventStartTimes.value,
+            competitionTitle: competitionTitle.value,
+            competitionDate: competitionDate.value // Save Date
+        }
+        localStorage.setItem(`comp_data_${activeCompetitionId.value}`, JSON.stringify(data))
+
+        // Update metadata timestamp
+        updateCompetitionMetadata(activeCompetitionId.value, {
+            lastModified: new Date().toISOString(),
+            name: competitionTitle.value,
+            date: competitionDate.value
+        })
+    }
+
     return {
         events,
         divisions,
@@ -457,8 +627,19 @@ export const useNamelistStore = defineStore('namelist', () => {
         eventStartTimes,
         setEventStartTime,
         getEventStartTime,
+        competitionTitle, // NEW
+        setCompetitionTitle, // NEW
+        competitionDate, // NEW
         history,
-        undo
+        undo,
+        // Multi-Comp
+        activeCompetitionId,
+        savedCompetitions,
+        loadCompetition,
+        createCompetition,
+        deleteCompetition,
+        saveCurrentCompetition,
+        updateCompetitionMetadata
     }
 })
 
@@ -466,43 +647,56 @@ export const useNamelistStore = defineStore('namelist', () => {
 export function initPersistence() {
     const store = useNamelistStore()
 
-    // Load from storage
-    const saved = localStorage.getItem('namelist_data')
-    if (saved) {
+    // 1. Load Index
+    const savedIndex = localStorage.getItem('saved_competitions_index')
+    if (savedIndex) {
         try {
-            const data = JSON.parse(saved)
-            if (data.events) store.events = data.events
-            if (data.divisions) {
-                // MIGRATION: If divisions are stored as strings, convert to objects
-                if (Array.isArray(data.divisions) && typeof data.divisions[0] === 'string') {
-                    store.divisions = (data.divisions as string[]).map(name => {
-                        const def = DEFAULT_DIVISIONS.find(d => d.name === name)
-                        return def ? { ...def } : { name, prefix: '' }
-                    })
-                } else {
-                    store.divisions = data.divisions
-                }
-            }
-            if (data.participants) store.participants = data.participants
-            if (data.entryCodes) store.entryCodes = data.entryCodes
-            if (data.eventStartTimes) store.eventStartTimes = data.eventStartTimes
-
-            // Run sanitization after load to fix any existing "ghost" data
-            store.sanitizeData()
+            store.savedCompetitions = JSON.parse(savedIndex)
         } catch (e) {
-            console.error('Failed to load saved data', e)
+            console.error("Failed to load competition index", e)
+            store.savedCompetitions = []
         }
     }
 
-    // Save on change
+    // 2. Migration Check: Do we have legacy 'namelist_data' but no competitions?
+    const legacyData = localStorage.getItem('namelist_data')
+    if (legacyData && store.savedCompetitions.length === 0) {
+        console.log("Migrating legacy data...")
+        const id = 'default_legacy'
+        const name = 'My First Competition'
+
+        // Create Entry
+        store.savedCompetitions.push({
+            id,
+            name,
+            date: new Date().toISOString().split('T')[0],
+            lastModified: new Date().toISOString()
+        })
+        localStorage.setItem('saved_competitions_index', JSON.stringify(store.savedCompetitions))
+
+        // Move Data
+        localStorage.setItem(`comp_data_${id}`, legacyData)
+        localStorage.removeItem('namelist_data') // Cleanup (optional, maybe keep as backup?)
+
+        // Don't remove legacy data just in case, but system now uses new key.
+    }
+
+    // 3. Subscribe for Auto-Save
     store.$subscribe((mutation, state) => {
-        localStorage.setItem('namelist_data', JSON.stringify({
-            events: state.events,
-            divisions: state.divisions,
-            participants: state.participants,
-            entryCodes: state.entryCodes,
-            eventStartTimes: state.eventStartTimes,
-            // rundownConfig: state.rundownConfig // Save rundown config (Global Deprecated)
-        }))
+        if (store.activeCompetitionId) {
+            // Persist Active ID
+            localStorage.setItem('active_competition_id', store.activeCompetitionId)
+            // Save Content
+            store.saveCurrentCompetition()
+        } else {
+            localStorage.removeItem('active_competition_id')
+        }
     })
+
+    // 4. Restore Active Session
+    const lastActiveId = localStorage.getItem('active_competition_id')
+    if (lastActiveId) {
+        // defined but might not be valid? loadCompetition handles validity check
+        store.loadCompetition(lastActiveId)
+    }
 }

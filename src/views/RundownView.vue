@@ -595,6 +595,16 @@ const exportCSV = () => {
         const p0 = pts[0]
         if (!p0) return null // Safety check
         
+        let timeStr = '-'
+        if (p0.eventCode && p0.heat !== undefined) {
+             const sched = eventScheduleMap.value.get(p0.eventCode)
+             if (sched) {
+                 const heatDiff = p0.heat - sched.startHeat
+                 const offset = heatDiff * Number(heatDuration.value)
+                 timeStr = addMinutes(sched.startTime, offset)
+             }
+        }
+
         return {
             entry_code: store.getParticipantEntryCode(p0),
             name: pts.map(p => p.name).join('\n'),
@@ -603,6 +613,7 @@ const exportCSV = () => {
             eventCode: p0.eventCode,
             heat: p0.heat,
             station: p0.station,
+            time: timeStr,
             status: 'normal'
         }
     }).filter((r): r is NonNullable<typeof r> => r !== null)
@@ -620,7 +631,7 @@ const exportCSV = () => {
         return 0
     })
 
-    const headers = ['entry_code', 'name', 'team', 'division', 'event', 'heat', 'station', 'status']
+    const headers = ['entry_code', 'name', 'team', 'division', 'event', 'heat', 'time', 'station', 'status']
     const csvRows = sorted.map(r => {
         return [
             r.entry_code,
@@ -629,6 +640,7 @@ const exportCSV = () => {
             r.division,
             r.eventCode,
             r.heat,
+            r.time,
             r.station,
             r.status
         ].map(val => `"${String(val).replace(/"/g, '""')}"`).join(',')
@@ -698,7 +710,7 @@ const handleRowClick = (p: typeof rundownRows.value[0]) => {
         <div class="w-full mx-auto print:max-w-none">
             <div class="flex items-center justify-between mb-6 print:hidden">
               <div class="flex items-center gap-4">
-                  <router-link to="/" class="text-gray-500 hover:text-gray-700 font-medium text-sm">← Back to Dashboard</router-link>
+                  <router-link to="/dashboard" class="text-gray-500 hover:text-gray-700 font-medium text-sm">← Back to Dashboard</router-link>
                   <h1 class="text-2xl font-bold text-gray-800">Event Rundown</h1>
               </div>
               <div class="flex gap-2">

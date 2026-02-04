@@ -28,11 +28,17 @@ const displayStartTime = computed(() => overrideStartTime.value || '09:00')
 
 // --- Schedule Logic ---
 const eventScheduleMap = computed(() => {
+    // If specific event selected, only schedule that. Else schedule all (configured)
     const allParts = store.participants.filter((p: any) => p.heat !== undefined)
-    if (allParts.length === 0) return new Map()
+    // Filter by target event if present
+    const filteredParts = targetEventCode.value 
+        ? allParts.filter(p => p.eventCode === targetEventCode.value)
+        : allParts
+
+    if (filteredParts.length === 0) return new Map()
 
     const heatEventMap = new Map<number, string>()
-    allParts.forEach((p: any) => {
+    filteredParts.forEach((p: any) => {
         if (!heatEventMap.has(p.heat!)) heatEventMap.set(p.heat!, p.eventCode)
     })
 
@@ -60,10 +66,15 @@ const eventScheduleMap = computed(() => {
         
         schedule.set(code, { startTime: currentTime, startHeat: firstHeat })
 
-        const timeAdded = heatCount * heatDuration.value
+        const conf = store.getRundownConfig(code)
+        // Use event specific heat duration if available, or fallback to query param or global default
+        const duration = conf.heatDuration || heatDuration.value
+        
+        const timeAdded = heatCount * duration
         currentTime = addMinutes(currentTime, timeAdded)
     })
     
+    // If showing single event, force start time to configured display time
     if (targetEventCode.value && overrideStartTime.value) {
          const sched = schedule.get(targetEventCode.value)
          if (sched) sched.startTime = displayStartTime.value
@@ -74,9 +85,12 @@ const eventScheduleMap = computed(() => {
 
 const rundownRows = computed(() => {
     let parts = store.participants.filter((p: any) => p.heat !== undefined)
-    if (targetEventCode.value) {
+    
+    // STRICT FILTERING: Only filter if targetEventCode is explicitly set
+    if (targetEventCode.value && targetEventCode.value.trim() !== '') {
         parts = parts.filter((p: any) => p.eventCode === targetEventCode.value)
     }
+    
     if (parts.length === 0) return []
 
     const heatMap = new Map<number, typeof parts>()

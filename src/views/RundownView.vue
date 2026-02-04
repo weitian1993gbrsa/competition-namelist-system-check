@@ -46,382 +46,89 @@ const addMinutes = (timeStr: string, minutes: number): string => {
     return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
-// Event Schedule Map: Calculates the Start Time for EACH Event
-// FIX APPLIED: Uses specific event duration instead of global
-const eventScheduleMap = computed(() => {
-    // 1. Get ALL scheduled participants
-    const allParts = store.participants.filter((p: Participant) => p.heat !== undefined)
-    if (allParts.length === 0) return new Map<string, { startTime: string, startHeat: number }>()
-
-    // 2. Identify Heats and Events
-    const heatEventMap = new Map<number, string>()
-    allParts.forEach((p: Participant) => {
-        if (!heatEventMap.has(p.heat!)) heatEventMap.set(p.heat!, p.eventCode)
-    })
-
-    const sortedHeats = Array.from(heatEventMap.keys()).sort((a, b) => a - b)
-    
-    // 3. Group Heats by Event Order
-    const eventOrder: string[] = []
-    const eventFirstHeat = new Map<string, number>()
-    const eventLastHeat = new Map<string, number>()
-
-    sortedHeats.forEach(h => {
-        const code = heatEventMap.get(h)!
-        if (!eventFirstHeat.has(code)) {
-            eventOrder.push(code)
-            eventFirstHeat.set(code, h)
-        }
-        eventLastHeat.set(code, h)
-    })
-
-    // 4. Calculate Times Chain
-    const schedule = new Map<string, { startTime: string, startHeat: number }>()
-    let currentTime = store.getRundownConfig('GLOBAL').startTime 
-
-    // REMOVED: const duration = Number(heatDuration.value) || 2
-
-    eventOrder.forEach(code => {
-        // Check for Custom Override
-        const customStart = store.getEventStartTime(code)
-        
-        // FIX: Get config SPECIFIC to this event
-        const eventConfig = store.getRundownConfig(code)
-        const thisEventDuration = eventConfig.heatDuration ?? 2
-
-        // Determine Start Time for this Event
-        let thisStart = currentTime
-        if (customStart) {
-            thisStart = customStart
-        }
-        
-        const firstHeat = eventFirstHeat.get(code)!
-        const lastHeat = eventLastHeat.get(code)!
-        const heatCount = lastHeat - firstHeat + 1
-
-        schedule.set(code, { startTime: thisStart, startHeat: firstHeat })
-
-        // Update currentTime for NEXT event using THIS event's duration
-        const timeAdded = heatCount * thisEventDuration
-        currentTime = addMinutes(thisStart, timeAdded)
-    })
-
-    return schedule
-})
-
 const displayStartTime = computed({
-    get: () => {
-        // Case 1: Specific Event Selected
-        if (selectedEventCode.value) {
-           const sched = eventScheduleMap.value.get(selectedEventCode.value)
-           // Case 1b: Event NOT scheduled yet.
-           if (eventScheduleMap.value.size > 0) {
-                const schedules = Array.from(eventScheduleMap.value.values())
-                
-                // Find Max Heat globally
-                let maxHeat = 0
-                let maxHeatEventCode = ''
-                
-                store.participants.forEach((p: Participant) => {
-                    if (p.heat && p.heat > maxHeat) {
-                        maxHeat = p.heat
-                        maxHeatEventCode = p.eventCode
-                    }
-                })
-
-                if (maxHeat > 0 && maxHeatEventCode) {
-                     const lastSched = eventScheduleMap.value.get(maxHeatEventCode)
-                     if (lastSched) {
-                         // FIX: Use last event's duration
-                         const lastEventConf = store.getRundownConfig(maxHeatEventCode)
-                         const lastDuration = lastEventConf.heatDuration ?? 2
-
-                         const heatDiff = maxHeat - lastSched.startHeat
-                         const offset = heatDiff * lastDuration
-                         const lastHeatTime = addMinutes(lastSched.startTime, offset)
-                         
-                         // Return Last Heat Time + Duration (Next available slot)
-                         return addMinutes(lastHeatTime, lastDuration)
-                     }
-                }
-           }
-        }
-
-        // Case 2: No Filter, or No previous events
-        return currentConfig.value.startTime
-    },
-    set: (val: string) => {
-        if (selectedEventCode.value) {
-            store.setEventStartTime(selectedEventCode.value, val)
-        } else {
-            store.updateRundownConfig({ 
-                startTime: val, 
-                heatDuration: Number(heatDuration.value),
-                stationCount: Number(stationCount.value),
-                rowsPerPage: Number(rowsPerPage.value)
-            }, 'GLOBAL')
-        }
+    get: () => currentConfig.value.startTime || '09:00',
+    set: (val) => {
+        store.updateRundownConfig({
+            ...currentConfig.value,
+            startTime: val
+        }, selectedEventCode.value)
     }
 })
 
-// Replace participantsWithSchedule with rundownRows logic
 const rundownRows = computed(() => {
-    // 1. Get scheduled participants
-    let parts = store.participants.filter((p: Participant) => p.heat !== undefined)
-    
-    // Filter by selected event if set
-    if (selectedEventCode.value) {
-        parts = parts.filter((p: Participant) => p.eventCode === selectedEventCode.value)
-    }
+    // Filter scheduled participants and ensure objects are compatible for UI state
+    const rows = store.participants
+        .filter(p => p.heat !== undefined && p.station !== undefined)
+        .map(p => ({
+            ...p,
+            isConflict: false, 
+            isPlaceholder: false 
+        }))
 
-    if (parts.length === 0) return []
-
-    // 2. Group by Heat
-    const heatMap = new Map<number, typeof parts>()
-    let maxHeat = 0
-    
-    parts.forEach((p: Participant) => {
-        const h = p.heat!
-        if (h > maxHeat) maxHeat = h
-        if (!heatMap.has(h)) heatMap.set(h, [])
-        heatMap.get(h)!.push(p)
+    // Sort by Heat -> Station
+    return rows.sort((a, b) => {
+        const hA = a.heat || 0
+        const hB = b.heat || 0
+        if (hA !== hB) return hA - hB
+        return (a.station || 0) - (b.station || 0)
     })
-
-    // 3. Build Full Rows
-    const rows: Array<{
-        id: string
-        heat: number
-        scheduleTime: string
-        station: number
-        eventCode: string
-        division: string
-        name: string
-        team: string
-        isPlaceholder?: boolean
-        isConflict?: boolean
-    }> = []
-
-    // Sort heats to ensure order
-    const sortedHeats = Array.from(heatMap.keys()).sort((a, b) => a - b)
-
-    sortedHeats.forEach(h => {
-        const participantsInHeat = heatMap.get(h)!
-        const heatEventCode = participantsInHeat[0]?.eventCode
-        
-        let currentStCount = Number(stationCount.value) || 12
-        
-        if (!selectedEventCode.value && heatEventCode) {
-             const conf = store.getRundownConfig(heatEventCode)
-             currentStCount = conf.stationCount ?? 12
-        }
-
-        for (let s = 1; s <= currentStCount; s++) {
-            const pts = participantsInHeat.filter((x: Participant) => x.station === s)
-            
-            if (pts.length > 0) {
-                const p0 = pts[0]
-                if (p0) {
-                    const combinedNames = pts.map((p: Participant) => p.name).join('\n')
-                    
-                    rows.push({
-                        id: p0.id,
-                        heat: p0.heat!,
-                        scheduleTime: p0.scheduleTime!,
-                        station: p0.station!,
-                        eventCode: p0.eventCode,
-                        division: p0.division,
-                        name: combinedNames,
-                        team: p0.team || '',
-                        isPlaceholder: false,
-                        isConflict: pts.length > 1 && new Set(pts.map((p: Participant) => p.team)).size > 1,
-                    })
-                }
-            } else {
-                rows.push({
-                    id: `placeholder-${h}-${s}`,
-                    heat: h,
-                    scheduleTime: '',
-                    station: s,
-                    eventCode: heatEventCode || '-',
-                    division: '-',
-                    name: '-',
-                    team: '-',
-                    isPlaceholder: true,
-                    isConflict: false
-                })
-            }
-        }
-    })
-
-    return rows
 })
 
-// Group by Event for Screen View
+const eventScheduleMap = computed(() => {
+    const map = new Map<string, { startHeat: number, startTime: string }>()
+    if (rundownRows.value.length === 0) return map
+
+    // Iterate sorted rows to find the first occurrence (Start Heat) of each event
+    for (const row of rundownRows.value) {
+        if (!map.has(row.eventCode)) {
+            // Use store's event start time (configured) or fallback to participant's schedule or default
+            let time = store.getEventStartTime(row.eventCode)
+            if (!time) time = row.scheduleTime || displayStartTime.value
+            
+            map.set(row.eventCode, { startHeat: row.heat || 1, startTime: time })
+        }
+    }
+    return map
+})
+
 const screenEventGroups = computed(() => {
     const groups: { code: string, rows: typeof rundownRows.value }[] = []
-    
-    if (rundownRows.value.length === 0) return []
-
     let currentGroup: { code: string, rows: typeof rundownRows.value } | null = null
-
-    rundownRows.value.forEach(row => {
-        const rowCode = row.eventCode.trim()
-        const isPlaceholder = row.isPlaceholder || rowCode === '-'
-
-        if (!currentGroup) {
-            currentGroup = {
-                code: isPlaceholder ? 'Unassigned' : rowCode,
-                rows: [row]
-            }
-            groups.push(currentGroup)
-        } else {
-            if (isPlaceholder) {
-                currentGroup.rows.push(row)
-            } else if (rowCode === currentGroup.code) {
-                currentGroup.rows.push(row)
-            } else {
-                currentGroup = {
-                    code: rowCode,
-                    rows: [row]
-                }
-                groups.push(currentGroup)
-            }
-        }
-    })
     
+    rundownRows.value.forEach(row => {
+        if (!currentGroup || currentGroup.code !== row.eventCode) {
+            currentGroup = { code: row.eventCode, rows: [] }
+            groups.push(currentGroup)
+        }
+        currentGroup.rows.push(row)
+    })
     return groups
 })
 
-const preventHeatSplit = ref(false)
-
 const paginatedRundown = computed(() => {
-    if (rundownRows.value.length === 0) return []
-
-    const pages: typeof rundownRows.value[] = []
-    let currentPage: typeof rundownRows.value = []
-    const activeRows = rundownRows.value.filter(r => !r.isPlaceholder)
-    const normalize = (code: string | undefined) => (code || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
-
-    let rowIdx = 0
-    while (rowIdx < activeRows.length) {
-        const SAFE_LINES_PER_PAGE = 40 
-        const remainingSpace = SAFE_LINES_PER_PAGE - currentPage.reduce((sum, r) => sum + Math.max(1, (r.name || '').split('\n').length), 0)
-        
-        const currentRow = activeRows[rowIdx]
-        if (!currentRow) break
-
-        const currentEvent = normalize(currentRow.eventCode)
-        
-        if (currentPage.length > 0) {
-             const prevRow = currentPage[currentPage.length - 1]
-             const prevEvent = normalize(prevRow?.eventCode)
-             
-             if (prevRow && prevEvent !== currentEvent) {
-                  pages.push(currentPage)
-                  currentPage = []
-                  continue 
-             }
-        }
-
-        if (!preventHeatSplit.value) {
-            let eventEndIdx = rowIdx
-            while(eventEndIdx < activeRows.length) {
-                const nextEvent = normalize(activeRows[eventEndIdx]?.eventCode)
-                if (nextEvent !== currentEvent) break
-                eventEndIdx++
-            }
-            
-            const eventRows = activeRows.slice(rowIdx, eventEndIdx)
-            let accumulatedCost = 0
-            let rowsToTake = 0
-            
-            const currentPageCost = currentPage.reduce((sum, r) => sum + Math.max(1, (r.name || '').split('\n').length), 0)
-            const remainingLines = SAFE_LINES_PER_PAGE - currentPageCost
-            
-            if (remainingLines <= 0) {
-                pages.push(currentPage)
-                currentPage = []
-                continue
-            }
-
-            for (const row of eventRows) {
-                 const cost = Math.max(1, (row.name || '').split('\n').length)
-                 if (accumulatedCost + cost <= remainingLines) {
-                      accumulatedCost += cost
-                      rowsToTake++
-                 } else {
-                      break 
-                 }
-            }
-
-            if (rowsToTake === 0 && currentPage.length > 0) {
-                 pages.push(currentPage)
-                 currentPage = []
-                 continue
-            } else if (rowsToTake === 0 && currentPage.length === 0) {
-                 rowsToTake = 1
-            }
-            
-            const chunk = activeRows.slice(rowIdx, rowIdx + rowsToTake)
-            currentPage.push(...chunk)
-            rowIdx += chunk.length
-            
-            const newTotalCost = currentPage.reduce((sum, r) => sum + Math.max(1, (r.name || '').split('\n').length), 0)
-
-            if (newTotalCost >= SAFE_LINES_PER_PAGE) {
-                pages.push(currentPage)
-                currentPage = []
-            }
-        } else {
-            const currentRow = activeRows[rowIdx]
-            if (!currentRow) break
-
-            const currentHeat = currentRow.heat
-            let heatEndIdx = rowIdx
-            while(heatEndIdx < activeRows.length && activeRows[heatEndIdx]?.heat === currentHeat) {
-                heatEndIdx++
-            }
-            const heatRows = activeRows.slice(rowIdx, heatEndIdx)
-            
-            if (heatRows.length <= remainingSpace) {
-                currentPage.push(...heatRows)
-                rowIdx += heatRows.length
-            } else {
-                if (currentPage.length > 0) {
-                    pages.push(currentPage)
-                    currentPage = []
-                } else {
-                    const chunk = heatRows.slice(0, rowsPerPage.value)
-                    currentPage.push(...chunk)
-                    rowIdx += chunk.length
-                    pages.push(currentPage)
-                    currentPage = []
-                }
-            }
-        }
+    const pages = []
+    const pageSize = rowsPerPage.value || 30
+    const rows = rundownRows.value
+    for (let i = 0; i < rows.length; i += pageSize) {
+        pages.push(rows.slice(i, i + pageSize))
     }
-
-    if (currentPage.length > 0) {
-        pages.push(currentPage)
-    }
-
     return pages
 })
 
 const generate = () => {
-    // REDUNDANT REMOVED: store.updateRundownConfig
     store.generateRundown(selectedEventCode.value)
 }
 
 const clear = () => {
-    if (confirm("Clear Rundown for " + (selectedEventCode.value || "All Events") + "?")) {
-        store.clearRundown(selectedEventCode.value || undefined)
+    if (confirm("Clear rundown?")) {
+        store.clearRundown(selectedEventCode.value)
     }
 }
 
 const wipe = () => {
-    if (confirm("⚠️ WIPE ALL? This will delete the entire rundown schedule for ALL events.")) {
-        store.clearRundown()
+    if (confirm("Wipe ALL data? (Participants & Schedule)")) {
+        store.wipeAllData()
     }
 }
 
@@ -433,7 +140,7 @@ const heatTimeMap = computed(() => {
     // 1. Build Heat -> Event Code Map
     const heatEventCode = new Map<number, string>()
     rundownRows.value.forEach(r => {
-        if (!heatEventCode.has(r.heat)) heatEventCode.set(r.heat, r.eventCode)
+        if (r.heat !== undefined && !heatEventCode.has(r.heat)) heatEventCode.set(r.heat, r.eventCode)
     })
 
     // 2. Calculate times
@@ -452,7 +159,8 @@ const heatTimeMap = computed(() => {
     return map
 })
 
-const calculateDisplayTime = (heat: number) => {
+const calculateDisplayTime = (heat: number | undefined) => {
+    if (heat === undefined) return '-'
     return heatTimeMap.value.get(heat) || '-'
 }
 
@@ -650,6 +358,7 @@ const handleRowClick = (p: typeof rundownRows.value[0]) => {
                     </div>
                 </div>
                 
+
 
                 <div class="mt-4 flex gap-3">
                     <button @click="generate" class="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 font-medium shadow-sm transition-colors">

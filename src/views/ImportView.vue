@@ -347,6 +347,6 @@ function processImport() {
   if (updatedCount > 0) msg += `\n- Updated/Moved: ${updatedCount}`
   
   alert(msg)
-  router.push('/')
+  router.push('/dashboard')
 }
 </script>
